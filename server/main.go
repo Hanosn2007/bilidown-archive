@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,9 +30,14 @@ const (
 
 var urlLocal = fmt.Sprintf("http://127.0.0.1:%d", HTTP_PORT)
 var urlLocalUnix = fmt.Sprintf("%s?___%d", urlLocal, time.Now().UnixMilli())
+var httpListener net.Listener
 
 func main() {
 	mustUseAppWorkdir()
+	if !reserveHTTPPort() {
+		openBrowser(urlLocalUnix)
+		return
+	}
 	warnFFmpeg()
 	// 启动托盘程序
 	systray.Run(onReady, nil)
@@ -81,6 +87,17 @@ func warnFFmpeg() {
 	}
 }
 
+func reserveHTTPPort() bool {
+	address := fmt.Sprintf(":%d", HTTP_PORT)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		fmt.Printf("Bilidown is already running or port %d is unavailable: %v.\n", HTTP_PORT, err)
+		return false
+	}
+	httpListener = listener
+	return true
+}
+
 // 配置和启动 HTTP 服务器
 func mustRunServer() {
 	// 前端打包文件
@@ -89,9 +106,9 @@ func mustRunServer() {
 	http.Handle("/api/", http.StripPrefix("/api", router.API()))
 	// 启动 HTTP 服务器
 	go func() {
-		err := http.ListenAndServe(fmt.Sprintf("%s:%d", HTTP_HOST, HTTP_PORT), nil)
+		err := http.Serve(httpListener, nil)
 		if err != nil {
-			log.Fatal("http.ListenAndServe:", err)
+			log.Fatal("http.Serve:", err)
 		}
 	}()
 }
