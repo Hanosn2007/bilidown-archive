@@ -2,10 +2,12 @@ package router
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 
 	"bilidown/archive"
@@ -177,22 +179,9 @@ func archivePreview(w http.ResponseWriter, r *http.Request) {
 		}
 		tmpPath := previewPath + ".tmp.mp4"
 		_ = os.Remove(tmpPath)
-		cmd := exec.Command(ffmpegPath,
-			"-i", source,
-			"-map", "0:v:0",
-			"-map", "0:a:0?",
-			"-c:v", "libx264",
-			"-preset", "veryfast",
-			"-crf", "23",
-			"-pix_fmt", "yuv420p",
-			"-c:a", "aac",
-			"-b:a", "160k",
-			"-movflags", "+faststart",
-			"-y", tmpPath,
-		)
-		if output, err := cmd.CombinedOutput(); err != nil {
+		if output, err := createPreview(ffmpegPath, source, tmpPath); err != nil {
 			_ = os.Remove(tmpPath)
-			util.Res{Success: false, Message: string(output)}.Write(w)
+			util.Res{Success: false, Message: output}.Write(w)
 			return
 		}
 		if err := os.Rename(tmpPath, previewPath); err != nil {
@@ -201,4 +190,55 @@ func archivePreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.ServeFile(w, r, previewPath)
+}
+
+func createPreview(ffmpegPath string, source string, tmpPath string) (string, error) {
+	commands := [][]string{softwarePreviewArgs(source, tmpPath)}
+	if runtime.GOOS == "darwin" {
+		commands = append([][]string{videoToolboxPreviewArgs(source, tmpPath)}, commands...)
+	}
+
+	var combinedOutput string
+	for _, args := range commands {
+		_ = os.Remove(tmpPath)
+		cmd := exec.Command(ffmpegPath, args...)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			return string(output), nil
+		}
+		combinedOutput += fmt.Sprintf("$ %s %v\n%s\n", ffmpegPath, args, string(output))
+	}
+	return combinedOutput, fmt.Errorf("preview transcode failed")
+}
+
+func commonPreviewArgs(source string, tmpPath string) []string {
+	return []string{
+		"-i", source,
+		"-map", "0:v:0",
+		"-map", "0:a:0?",
+		"-pix_fmt", "yuv420p",
+		"-c:a", "aac",
+		"-b:a", "160k",
+		"-movflags", "+faststart",
+		"-y", tmpPath,
+	}
+}
+
+func softwarePreviewArgs(source string, tmpPath string) []string {
+	args := commonPreviewArgs(source, tmpPath)
+	return append(args[:6], append([]string{
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "23",
+	}, args[6:]...)...)
+}
+
+func videoToolboxPreviewArgs(source string, tmpPath string) []string {
+	args := commonPreviewArgs(source, tmpPath)
+	return append(args[:6], append([]string{
+		"-c:v", "h264_videotoolbox",
+		"-b:v", "6000k",
+		"-maxrate", "10000k",
+		"-tag:v", "avc1",
+	}, args[6:]...)...)
 }

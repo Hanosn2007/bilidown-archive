@@ -29,7 +29,7 @@ var urlLocal = fmt.Sprintf("http://127.0.0.1:%d", HTTP_PORT)
 var urlLocalUnix = fmt.Sprintf("%s?___%d", urlLocal, time.Now().UnixMilli())
 
 func main() {
-	checkFFmpeg()
+	warnFFmpeg()
 	// 启动托盘程序
 	systray.Run(onReady, nil)
 }
@@ -53,11 +53,11 @@ func onReady() {
 	select {}
 }
 
-// checkFFmpeg 检测 ffmpeg 的安装情况，如果未安装则打印提示信息。
-func checkFFmpeg() {
+// warnFFmpeg 检测 ffmpeg 的安装情况。直接播放原文件不需要 ffmpeg，
+// 下载合并、写入媒体元数据和生成预览缓存时才需要。
+func warnFFmpeg() {
 	if _, err := util.GetFFmpegPath(); err != nil {
-		fmt.Println("🚨 FFmpeg is missing. Install it from https://www.ffmpeg.org/download.html or place it in ./bin, then restart the application.")
-		select {}
+		fmt.Println("⚠️ FFmpeg is missing. Direct playback can still work, but downloads, metadata writing and preview transcoding require FFmpeg. Install it from https://www.ffmpeg.org/download.html or place it in ./bin.")
 	}
 }
 

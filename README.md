@@ -113,6 +113,8 @@ pnpm dev
 go build && ./bilidown
 ```
 
+macOS 实体机运行和播放策略见 [docs/archive-macos.md](./docs/archive-macos.md)。
+
 ## 特别感谢
 
 -   [twbs/bootstrap](https://github.com/twbs/bootstrap) - 前端开发必备的响应式框架，简化页面布局
