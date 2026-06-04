@@ -9,6 +9,7 @@ build/
 release/
 server/bilidown
 server/bilidown-*
+server/Bilidown.app/
 .VSCodeCounter/
 .claude/
 server/bilidown.exe~

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"bilidown/archive"
@@ -29,9 +31,27 @@ var urlLocal = fmt.Sprintf("http://127.0.0.1:%d", HTTP_PORT)
 var urlLocalUnix = fmt.Sprintf("%s?___%d", urlLocal, time.Now().UnixMilli())
 
 func main() {
+	mustUseAppWorkdir()
 	warnFFmpeg()
 	// 启动托盘程序
 	systray.Run(onReady, nil)
+}
+
+func mustUseAppWorkdir() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	marker := ".app" + string(filepath.Separator) + "Contents" + string(filepath.Separator) + "MacOS"
+	if !strings.Contains(exe, marker) {
+		return
+	}
+	appDir := filepath.Dir(filepath.Dir(filepath.Dir(exe)))
+	workdir := filepath.Dir(appDir)
+	if err := os.Chdir(workdir); err != nil {
+		log.Fatalln("os.Chdir:", err)
+	}
 }
 
 func onReady() {

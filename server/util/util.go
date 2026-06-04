@@ -52,11 +52,16 @@ func FilterFileName(fileName string) string {
 
 // GetFFmpegPath 获取可用的 FFmpeg 执行路径。
 func GetFFmpegPath() (string, error) {
-	if err := exec.Command("ffmpeg", "-version").Run(); err == nil {
-		return "ffmpeg", nil
+	candidates := []string{
+		"ffmpeg",
+		"bin/ffmpeg",
+		"/opt/homebrew/bin/ffmpeg",
+		"/usr/local/bin/ffmpeg",
 	}
-	if err := exec.Command("bin/ffmpeg", "-version").Run(); err == nil {
-		return "bin/ffmpeg", nil
+	for _, candidate := range candidates {
+		if err := exec.Command(candidate, "-version").Run(); err == nil {
+			return candidate, nil
+		}
 	}
 	return "", errors.New("ffmpeg not found")
 }
