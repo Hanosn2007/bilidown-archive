@@ -23,6 +23,11 @@ func GetDefaultDownloadFolder() (string, error) {
 	return filepath.Abs("./download")
 }
 
+// GetDefaultArchiveFolder 获取默认归档备份路径。
+func GetDefaultArchiveFolder() (string, error) {
+	return filepath.Abs("./library/archive")
+}
+
 func IsNumber(str string) bool {
 	_, err := strconv.Atoi(str)
 	return err == nil

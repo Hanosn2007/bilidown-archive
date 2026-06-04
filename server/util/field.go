@@ -5,6 +5,7 @@ type FieldUtil struct{}
 func (f FieldUtil) AllowSelect() []string {
 	return []string{
 		"download_folder",
+		"archive_folder",
 		"archive_monitor_enabled",
 		"archive_fav_media_id",
 		"archive_scan_interval_minutes",
@@ -19,6 +20,7 @@ func (f FieldUtil) AllowSelect() []string {
 func (f FieldUtil) AllowUpdate() []string {
 	return []string{
 		"download_folder",
+		"archive_folder",
 		"archive_monitor_enabled",
 		"archive_fav_media_id",
 		"archive_scan_interval_minutes",

@@ -10,6 +10,7 @@ type ArchiveSettings = {
     enabled: boolean
     favMediaId: number
     intervalMinutes: number
+    archiveFolder: string
     downloadAllPages: boolean
     downloadType: 'audio' | 'video' | 'merge'
     format: string
@@ -161,6 +162,7 @@ export class ArchiveRoute implements VanComponent {
         enabled: false,
         favMediaId: 0,
         intervalMinutes: 10,
+        archiveFolder: '',
         downloadAllPages: true,
         downloadType: 'merge',
         format: 'highest',
@@ -220,6 +222,7 @@ export class ArchiveRoute implements VanComponent {
         const enabled = van.state(this.settings.enabled)
         const favMediaId = van.state(this.settings.favMediaId.toString())
         const interval = van.state(this.settings.intervalMinutes.toString())
+        const archiveFolder = van.state(this.settings.archiveFolder)
         const allPages = van.state(this.settings.downloadAllPages)
         const downloadType = van.state(this.settings.downloadType)
         const format = van.state(this.settings.format)
@@ -230,6 +233,7 @@ export class ArchiveRoute implements VanComponent {
             enabled.val = this.settings.enabled
             favMediaId.val = this.settings.favMediaId.toString()
             interval.val = this.settings.intervalMinutes.toString()
+            archiveFolder.val = this.settings.archiveFolder
             allPages.val = this.settings.downloadAllPages
             downloadType.val = this.settings.downloadType
             format.val = this.settings.format
@@ -239,6 +243,17 @@ export class ArchiveRoute implements VanComponent {
 
         return div({ class: 'vstack gap-3' },
             div({ class: 'h5 mb-0' }, '收藏夹监控'),
+            div({ class: 'row g-2 align-items-end' },
+                div({ class: 'col-12' },
+                    label({ class: 'form-label' }, '归档备份目录'),
+                    input({
+                        class: 'form-control',
+                        value: archiveFolder,
+                        placeholder: '自动收藏夹备份保存到这里，普通下载不使用此目录',
+                        oninput: (e) => archiveFolder.val = (e.target as HTMLInputElement).value
+                    })
+                )
+            ),
             div({ class: 'row g-3 align-items-end' },
                 div({ class: 'col-12 col-md-3' },
                     label({ class: 'form-label' }, '收藏夹 media_id'),
@@ -346,6 +361,7 @@ export class ArchiveRoute implements VanComponent {
                                 enabled: enabled.val,
                                 favMediaId: Number(favMediaId.val),
                                 intervalMinutes: Number(interval.val) || 10,
+                                archiveFolder: archiveFolder.val.trim(),
                                 downloadAllPages: allPages.val,
                                 downloadType: downloadType.val,
                                 format: format.val || 'highest',

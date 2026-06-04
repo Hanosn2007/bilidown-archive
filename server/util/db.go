@@ -88,46 +88,54 @@ func SaveFields(db *sql.DB, data [][2]string) error {
 
 // GetCurrentFolder 获取数据库中的下载保存路径，如果不存在则将默认路径保存到数据库
 func GetCurrentFolder(db *sql.DB) (string, error) {
+	return getFolderField(db, "download_folder", GetDefaultDownloadFolder, SaveDownloadFolder)
+}
+
+// SaveDownloadFolder 保存下载路径，不存在则自动创建
+func SaveDownloadFolder(db *sql.DB, downloadFolder string) error {
+	return saveFolderField(db, "download_folder", downloadFolder)
+}
+
+// GetArchiveFolder 获取自动归档备份路径，如果不存在则将默认路径保存到数据库。
+func GetArchiveFolder(db *sql.DB) (string, error) {
+	return getFolderField(db, "archive_folder", GetDefaultArchiveFolder, SaveArchiveFolder)
+}
+
+// SaveArchiveFolder 保存自动归档备份路径，不存在则自动创建。
+func SaveArchiveFolder(db *sql.DB, archiveFolder string) error {
+	return saveFolderField(db, "archive_folder", archiveFolder)
+}
+
+func getFolderField(db *sql.DB, name string, getDefault func() (string, error), save func(*sql.DB, string) error) (string, error) {
 	var folder string
 	SqliteLock.Lock()
-	err := db.QueryRow(`SELECT "value" FROM "field" WHERE "name" = 'download_folder'`).Scan(&folder)
+	err := db.QueryRow(`SELECT "value" FROM "field" WHERE "name" = ?`, name).Scan(&folder)
 	SqliteLock.Unlock()
 	if err != nil && err == sql.ErrNoRows {
-		folder, err = GetDefaultDownloadFolder()
+		folder, err = getDefault()
 		if err != nil {
 			return "", err
 		}
-		err = os.MkdirAll(folder, os.ModePerm)
-		if err != nil {
-			return "", err
-		}
-		err = SaveDownloadFolder(db, folder)
-		if err != nil {
+		if err := save(db, folder); err != nil {
 			return "", err
 		}
 		return folder, nil
 	}
-	err = os.MkdirAll(folder, os.ModePerm)
 	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(folder, os.ModePerm); err != nil {
 		return "", err
 	}
 	return folder, nil
 }
 
-// SaveDownloadFolder 保存下载路径，不存在则自动创建
-func SaveDownloadFolder(db *sql.DB, downloadFolder string) error {
-	_, err := os.Stat(downloadFolder)
-	if err != nil {
-		if os.IsNotExist(err) {
-			err = os.MkdirAll(downloadFolder, os.ModePerm)
-			if err != nil {
-				return err
-			}
-		}
+func saveFolderField(db *sql.DB, name string, folder string) error {
+	if err := os.MkdirAll(folder, os.ModePerm); err != nil {
 		return err
 	}
 	SqliteLock.Lock()
-	_, err = db.Exec(`INSERT OR REPLACE INTO "field" ("name", "value") VALUES ('download_folder', ?)`, downloadFolder)
+	_, err := db.Exec(`INSERT OR REPLACE INTO "field" ("name", "value") VALUES (?, ?)`, name, folder)
 	SqliteLock.Unlock()
 	return err
 }

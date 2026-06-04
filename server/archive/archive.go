@@ -23,6 +23,7 @@ type Settings struct {
 	Enabled          bool   `json:"enabled"`
 	FavMediaID       int    `json:"favMediaId"`
 	IntervalMinutes  int    `json:"intervalMinutes"`
+	ArchiveFolder    string `json:"archiveFolder"`
 	DownloadAllPages bool   `json:"downloadAllPages"`
 	DownloadType     string `json:"downloadType"`
 	Format           string `json:"format"`
@@ -106,6 +107,7 @@ func GetSettings(db *sql.DB) (Settings, error) {
 		PreferHiResAudio: true,
 	}
 	fields, err := util.GetFields(db,
+		"archive_folder",
 		"archive_monitor_enabled",
 		"archive_fav_media_id",
 		"archive_scan_interval_minutes",
@@ -117,6 +119,11 @@ func GetSettings(db *sql.DB) (Settings, error) {
 	)
 	if err != nil {
 		return settings, err
+	}
+	if strings.TrimSpace(fields["archive_folder"]) != "" {
+		settings.ArchiveFolder = strings.TrimSpace(fields["archive_folder"])
+	} else if folder, err := util.GetArchiveFolder(db); err == nil {
+		settings.ArchiveFolder = folder
 	}
 	settings.Enabled = fields["archive_monitor_enabled"] == "1"
 	if v, err := strconv.Atoi(fields["archive_fav_media_id"]); err == nil {
@@ -147,6 +154,17 @@ func SaveSettings(db *sql.DB, settings Settings) error {
 	if settings.IntervalMinutes <= 0 {
 		settings.IntervalMinutes = 10
 	}
+	settings.ArchiveFolder = strings.TrimSpace(settings.ArchiveFolder)
+	if settings.ArchiveFolder == "" {
+		folder, err := util.GetDefaultArchiveFolder()
+		if err != nil {
+			return err
+		}
+		settings.ArchiveFolder = folder
+	}
+	if err := util.SaveArchiveFolder(db, settings.ArchiveFolder); err != nil {
+		return err
+	}
 	if settings.DownloadType != "audio" && settings.DownloadType != "video" && settings.DownloadType != "merge" {
 		settings.DownloadType = "merge"
 	}
@@ -169,6 +187,7 @@ func SaveSettings(db *sql.DB, settings Settings) error {
 		hiResAudio = "1"
 	}
 	return util.SaveFields(db, [][2]string{
+		{"archive_folder", settings.ArchiveFolder},
 		{"archive_monitor_enabled", enabled},
 		{"archive_fav_media_id", strconv.Itoa(settings.FavMediaID)},
 		{"archive_scan_interval_minutes", strconv.Itoa(settings.IntervalMinutes)},
@@ -204,6 +223,7 @@ func ListItems(db *sql.DB, query string, limit int) ([]Item, error) {
 	}
 	defer rows.Close()
 	items := []Item{}
+	archiveFolder, _ := util.GetArchiveFolder(db)
 	for rows.Next() {
 		item := Item{}
 		if err := rows.Scan(
@@ -213,7 +233,7 @@ func ListItems(db *sql.DB, query string, limit int) ([]Item, error) {
 		); err != nil {
 			return nil, err
 		}
-		normalizeItemPaths(&item)
+		normalizeItemPaths(&item, archiveFolder)
 		items = append(items, item)
 	}
 	return items, nil
@@ -442,7 +462,7 @@ func createPageTask(db *sql.DB, client *bilibili.BiliClient, settings Settings, 
 	if downloadType == "" {
 		return fmt.Errorf("没有可下载的音频或视频流")
 	}
-	folder, err := util.GetCurrentFolder(db)
+	folder, err := util.GetArchiveFolder(db)
 	if err != nil {
 		return err
 	}
@@ -657,6 +677,7 @@ func getItemsByIDs(db *sql.DB, ids []int64) ([]Item, error) {
 	}
 	defer rows.Close()
 	items := []Item{}
+	archiveFolder, _ := util.GetArchiveFolder(db)
 	for rows.Next() {
 		item := Item{}
 		if err := rows.Scan(
@@ -666,16 +687,16 @@ func getItemsByIDs(db *sql.DB, ids []int64) ([]Item, error) {
 		); err != nil {
 			return nil, err
 		}
-		normalizeItemPaths(&item)
+		normalizeItemPaths(&item, archiveFolder)
 		items = append(items, item)
 	}
 	return items, nil
 }
 
-func normalizeItemPaths(item *Item) {
-	item.FilePath = resolveArchiveMediaPath(*item)
-	if download, err := util.GetDefaultDownloadFolder(); err == nil {
-		pageDir := filepath.Join(download, "_archive", item.Bvid, fmt.Sprintf("%03d", item.Page))
+func normalizeItemPaths(item *Item, archiveFolder string) {
+	item.FilePath = resolveArchiveMediaPath(*item, archiveFolder)
+	if archiveFolder != "" {
+		pageDir := filepath.Join(archiveFolder, "_archive", item.Bvid, fmt.Sprintf("%03d", item.Page))
 		item.InfoPath = resolveSidecarPath(item.InfoPath, filepath.Join(pageDir, "info.json"))
 		item.CoverPath = resolveSidecarPath(item.CoverPath, filepath.Join(pageDir, "cover.jpg"))
 		item.DanmakuPath = resolveSidecarPath(item.DanmakuPath, filepath.Join(pageDir, "danmaku.xml"))
@@ -692,17 +713,16 @@ func resolveSidecarPath(oldPath string, currentPath string) string {
 	return util.ResolveExistingPath(oldPath)
 }
 
-func resolveArchiveMediaPath(item Item) string {
+func resolveArchiveMediaPath(item Item, archiveFolder string) string {
 	if _, err := os.Stat(item.FilePath); err == nil {
 		return item.FilePath
 	}
-	download, err := util.GetDefaultDownloadFolder()
-	if err != nil || item.TaskID <= 0 {
+	if archiveFolder == "" || item.TaskID <= 0 {
 		return util.ResolveExistingPath(item.FilePath)
 	}
 	token := strings.ReplaceAll(base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(item.TaskID, 10))), "=", "")
 	for _, ext := range []string{".mp4", ".m4a"} {
-		matches, err := filepath.Glob(filepath.Join(download, "*"+token+ext))
+		matches, err := filepath.Glob(filepath.Join(archiveFolder, "*"+token+ext))
 		if err == nil && len(matches) > 0 {
 			return matches[0]
 		}
