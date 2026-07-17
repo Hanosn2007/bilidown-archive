@@ -284,7 +284,12 @@ func updateVersionAvailability(db *sql.DB, subjectID int64, versionID int64, ava
 		return err
 	}
 	if eventKind != "" {
-		_, err := db.Exec(`INSERT INTO "archive_event" ("subject_id", "version_id", "kind", "message") VALUES (?, ?, ?, ?)`, subjectID, versionID, eventKind, message)
+		_, err := db.Exec(`INSERT INTO "archive_event" ("subject_id", "version_id", "kind", "message")
+			SELECT ?, ?, ?, ?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM "archive_event"
+				WHERE "subject_id" = ? AND "version_id" = ? AND "kind" = ? AND "message" = ?
+			)`, subjectID, versionID, eventKind, message, subjectID, versionID, eventKind, message)
 		return err
 	}
 	return nil

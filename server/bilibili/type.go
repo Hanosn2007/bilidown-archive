@@ -115,13 +115,26 @@ type Page struct {
 
 // 通过 BVID 获取的视频信息
 type VideoInfo struct {
-	Bvid    string `json:"bvid"`
-	Aid     int    `json:"aid"`
-	Pic     string `json:"pic"`
-	Title   string `json:"title"`
-	Pubdate int    `json:"pubdate"`
-	Desc    string `json:"desc"`
-	Owner   struct {
+	Bvid               string `json:"bvid"`
+	Aid                int    `json:"aid"`
+	Pic                string `json:"pic"`
+	Title              string `json:"title"`
+	Pubdate            int    `json:"pubdate"`
+	Desc               string `json:"desc"`
+	RedirectURL        string `json:"redirect_url"`
+	IsChargeableSeason bool   `json:"is_chargeable_season"`
+	IsUpowerExclusive  bool   `json:"is_upower_exclusive"`
+	IsUpowerPlay       bool   `json:"is_upower_play"`
+	IsUpowerPreview    bool   `json:"is_upower_preview"`
+	Rights             struct {
+		Movie         int `json:"movie"`
+		Pay           int `json:"pay"`
+		Ugcpay        int `json:"ugc_pay"`
+		UgcpayPreview int `json:"ugc_pay_preview"`
+		ArcPay        int `json:"arc_pay"`
+		FreeWatch     int `json:"free_watch"`
+	} `json:"rights"`
+	Owner struct {
 		Mid  int    `json:"mid"`
 		Name string `json:"name"`
 		Face string `json:"face"`
@@ -154,6 +167,31 @@ type VideoInfo struct {
 		} `json:"sections"`
 		Title string `json:"title"`
 	} `json:"ugc_season"`
+}
+
+// AccessRestrictionHint 返回视频详情中能直接识别出的访问限制类型。
+// 该提示只用于解析失败后的说明；即使存在限制标记，上层仍应先尝试获取播放流。
+func (v *VideoInfo) AccessRestrictionHint() string {
+	if v == nil {
+		return ""
+	}
+	if v.IsUpowerExclusive || v.IsUpowerPlay || v.IsUpowerPreview {
+		return "充电专属视频"
+	}
+	redirectURL := strings.ToLower(v.RedirectURL)
+	if strings.Contains(redirectURL, "cheese") {
+		return "课程视频"
+	}
+	if v.Rights.Movie != 0 || strings.Contains(redirectURL, "movie") {
+		return "电影或影视付费内容"
+	}
+	if strings.Contains(redirectURL, "bangumi") {
+		return "番剧或影视会员内容"
+	}
+	if v.Rights.Ugcpay != 0 || v.Rights.UgcpayPreview != 0 || v.Rights.ArcPay != 0 || v.Rights.Pay != 0 || v.IsChargeableSeason {
+		return "付费视频"
+	}
+	return ""
 }
 
 // EpisodeInBV 通过 BV 获取的视频信息中的合集信息

@@ -516,20 +516,10 @@ func createPageTask(db *sql.DB, client *bilibili.BiliClient, settings Settings, 
 	_ = updateArchiveItemState(db, item.ID, "resolving", "available", "正在解析播放地址")
 	playInfo, err := client.GetPlayInfo(videoInfo.Bvid, page.Cid)
 	if err != nil {
-		status := "error"
-		availability := "available"
-		message := fmt.Sprintf("解析播放地址失败，可稍后重试: %v", err)
-		var apiErr *bilibili.APIError
-		if errors.As(err, &apiErr) && apiErr.ContentUnavailable() {
-			status = "unavailable"
-			availability = "unavailable"
-			message = fmt.Sprintf("视频在下载前已不可用: %s", apiErr.Message)
-		}
-		_ = updateArchiveItemState(db, item.ID, status, availability, message)
-		return err
+		return markPlayInfoFailure(db, item, videoInfo, err)
 	}
 	if playInfo == nil || playInfo.Dash == nil {
-		return fmt.Errorf("播放流信息为空")
+		return markPlayInfoFailure(db, item, videoInfo, fmt.Errorf("播放流信息为空"))
 	}
 	var format common.MediaFormat
 	videoURL := ""
@@ -537,11 +527,11 @@ func createPageTask(db *sql.DB, client *bilibili.BiliClient, settings Settings, 
 		if len(playInfo.Dash.Video) > 0 {
 			format, err = chooseFormat(playInfo, settings.Format)
 			if err != nil {
-				return err
+				return markPlayInfoFailure(db, item, videoInfo, err)
 			}
 			videoURL, err = getVideoURL(playInfo.Dash.Video, format, settings.PreferredCodec)
 			if err != nil {
-				return err
+				return markPlayInfoFailure(db, item, videoInfo, err)
 			}
 		}
 	}
@@ -551,7 +541,7 @@ func createPageTask(db *sql.DB, client *bilibili.BiliClient, settings Settings, 
 	}
 	downloadType := effectiveDownloadType(settings.DownloadType, audioURL, videoURL)
 	if downloadType == "" {
-		return fmt.Errorf("没有可下载的音频或视频流")
+		return markPlayInfoFailure(db, item, videoInfo, fmt.Errorf("没有可下载的音频或视频流"))
 	}
 	folder, err := util.GetArchiveFolder(db)
 	if err != nil {
@@ -579,6 +569,80 @@ func createPageTask(db *sql.DB, client *bilibili.BiliClient, settings Settings, 
 		return err
 	}
 	go newTask.Start()
+	return nil
+}
+
+func markPlayInfoFailure(db *sql.DB, item *Item, videoInfo *bilibili.VideoInfo, cause error) error {
+	status := "error"
+	availability := "available"
+	eventKind := "play_info_error"
+	message := fmt.Sprintf("解析播放地址失败，可稍后重试: %v", cause)
+	var apiErr *bilibili.APIError
+	if errors.As(cause, &apiErr) && apiErr.ContentUnavailable() {
+		status = "unavailable"
+		availability = "unavailable"
+		eventKind = "unavailable_before_backup"
+		message = fmt.Sprintf("视频在下载前已不可用: %s", apiErr.Message)
+	} else if restriction := accessRestrictionHint(videoInfo, cause); restriction != "" {
+		availability = "restricted"
+		eventKind = "access_restricted"
+		message = fmt.Sprintf("检测到%s；已尝试解析，但当前登录账号没有取得可下载播放流。请确认账号已购买、充电或具备对应会员及地区权限后重试。原始错误：%v", restriction, cause)
+	}
+	_ = updateArchiveItemState(db, item.ID, status, availability, message)
+	if item.SubjectID > 0 && item.VersionID > 0 {
+		util.SqliteLock.Lock()
+		_ = updateVersionAvailability(db, item.SubjectID, item.VersionID, availability, status, message, eventKind)
+		util.SqliteLock.Unlock()
+	}
+	_ = updateInfoState(item.InfoPath, status, availability, message)
+	return errors.New(message)
+}
+
+func accessRestrictionHint(videoInfo *bilibili.VideoInfo, cause error) string {
+	if hint := videoInfo.AccessRestrictionHint(); hint != "" {
+		return hint
+	}
+	message := strings.ToLower(fmt.Sprint(cause))
+	for _, keyword := range []string{"充电", "课程", "付费", "购买", "大会员", "会员专享", "电影", "番剧", "试看", "权限", "地区限制", "vip", "pay"} {
+		if strings.Contains(message, keyword) {
+			return "受限内容"
+		}
+	}
+	var apiErr *bilibili.APIError
+	if errors.As(cause, &apiErr) && apiErr.Code == -10403 {
+		return "受限内容"
+	}
+	return ""
+}
+
+func updateInfoState(infoPath string, status string, availability string, message string) error {
+	if strings.TrimSpace(infoPath) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		return err
+	}
+	info := map[string]any{}
+	if err := json.Unmarshal(data, &info); err != nil {
+		return err
+	}
+	info["archive_state"] = status
+	info["availability"] = availability
+	info["archive_message"] = message
+	info["updated_at"] = time.Now().Format(time.RFC3339)
+	data, err = json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmpPath := infoPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, infoPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
 	return nil
 }
 
@@ -878,8 +942,15 @@ func attachTaskToItem(db *sql.DB, itemID int64, t *task.Task, page bilibili.Page
 func getExistingItem(db *sql.DB, bvid string, cid int) (*Item, error) {
 	item := Item{}
 	util.SqliteLock.Lock()
-	err := db.QueryRow(`SELECT "id", "subject_id", "version_id", "task_id", "bvid", "cid", "page", "status", "availability" FROM "archive_item" WHERE "bvid" = ? AND "cid" = ?`, bvid, cid).
-		Scan(&item.ID, &item.SubjectID, &item.VersionID, &item.TaskID, &item.Bvid, &item.Cid, &item.Page, &item.Status, &item.Availability)
+	err := db.QueryRow(`SELECT
+		"id", "subject_id", "version_id", "task_id", "bvid", "cid", "page", "title", "part", "owner",
+		"file_path", "info_path", "cover_path", "danmaku_path", "duration", "availability", "status", "message",
+		"created_at", "updated_at"
+		FROM "archive_item" WHERE "bvid" = ? AND "cid" = ?`, bvid, cid).Scan(
+		&item.ID, &item.SubjectID, &item.VersionID, &item.TaskID, &item.Bvid, &item.Cid, &item.Page, &item.Title, &item.Part, &item.Owner,
+		&item.FilePath, &item.InfoPath, &item.CoverPath, &item.DanmakuPath, &item.Duration, &item.Availability, &item.Status, &item.Message,
+		&item.CreatedAt, &item.UpdatedAt,
+	)
 	util.SqliteLock.Unlock()
 	if err == sql.ErrNoRows {
 		return nil, nil

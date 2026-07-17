@@ -32,7 +32,7 @@ type ArchiveItem = {
     coverPath: string
     danmakuPath: string
     status: 'resolving' | 'waiting' | 'running' | 'done' | 'error' | 'unavailable'
-    availability: 'unknown' | 'available' | 'unavailable'
+    availability: 'unknown' | 'available' | 'unavailable' | 'restricted'
     message: string
     createdAt: string
     updatedAt: string
