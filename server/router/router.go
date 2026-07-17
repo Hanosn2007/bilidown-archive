@@ -22,6 +22,7 @@ func API() *http.ServeMux {
 	router.HandleFunc("/getActiveTask", getActiveTask)
 	router.HandleFunc("/getTaskList", getTaskList)
 	router.HandleFunc("/showFile", showFile)
+	router.HandleFunc("/task/reveal", revealTask)
 	router.HandleFunc("/getFields", getFields)
 	router.HandleFunc("/saveFields", saveFields)
 	router.HandleFunc("/logout", logout)
@@ -35,11 +36,16 @@ func API() *http.ServeMux {
 	router.HandleFunc("/archive/getSettings", archiveGetSettings)
 	router.HandleFunc("/archive/saveSettings", archiveSaveSettings)
 	router.HandleFunc("/archive/scanFavorite", archiveScanFavorite)
+	router.HandleFunc("/archive/scanStatus", archiveScanStatus)
 	router.HandleFunc("/archive/list", archiveList)
+	router.HandleFunc("/archive/events", archiveEvents)
+	router.HandleFunc("/archive/subject", archiveSubject)
+	router.HandleFunc("/archive/linkVersion", archiveLinkVersion)
 	router.HandleFunc("/archive/delete", archiveDelete)
 	router.HandleFunc("/archive/retry", archiveRetry)
 	router.HandleFunc("/archive/preview", archivePreview)
 	router.HandleFunc("/archive/deletePreview", archiveDeletePreview)
+	router.HandleFunc("/archive/reveal", archiveReveal)
 	return router
 }
 

@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	HTTP_PORT = 8098     // 限定 HTTP 服务器端口
-	HTTP_HOST = ""       // 限定 HTTP 服务器主机
-	VERSION   = "v2.1.1" // 软件版本号，将影响托盘标题显示
+	HTTP_PORT = 8098                // 限定 HTTP 服务器端口
+	HTTP_HOST = ""                  // 限定 HTTP 服务器主机
+	VERSION   = "v2.1.1-archive-p0" // 软件版本号，将影响托盘标题显示
 )
 
 var urlLocal = fmt.Sprintf("http://127.0.0.1:%d", HTTP_PORT)
@@ -263,7 +263,16 @@ func addMissingColumns(db *sql.DB) error {
 // initHistoryTask 将上一次程序运行时未完成的任务进度全部变为 error
 func initHistoryTask(db *sql.DB) error {
 	util.SqliteLock.Lock()
+	defer util.SqliteLock.Unlock()
 	_, err := db.Exec(`UPDATE "task" SET "status" = 'error' WHERE "status" IN ('waiting', 'running')`)
-	util.SqliteLock.Unlock()
+	if err != nil {
+		return err
+	}
+	resumeMessage := "应用上次退出时下载未完成；临时分段已保留，可点击重试续传"
+	resolveMessage := "应用上次退出时解析未完成，可点击重试"
+	if _, err := db.Exec(`UPDATE "archive_item" SET "status" = 'error', "message" = CASE WHEN "task_id" > 0 THEN ? ELSE ? END, "updated_at" = CURRENT_TIMESTAMP WHERE "status" IN ('resolving', 'waiting', 'running')`, resumeMessage, resolveMessage); err != nil {
+		return err
+	}
+	_, err = db.Exec(`UPDATE "archive_part" SET "status" = 'error', "message" = CASE WHEN "task_id" > 0 THEN ? ELSE ? END, "updated_at" = CURRENT_TIMESTAMP WHERE "status" IN ('resolving', 'waiting', 'running')`, resumeMessage, resolveMessage)
 	return err
 }

@@ -28,7 +28,7 @@ func (client *BiliClient) GetVideoInfo(bvid string) (*VideoInfo, error) {
 		return nil, err
 	}
 	if body.Code != 0 {
-		return nil, errors.New(body.Message)
+		return nil, &APIError{Code: body.Code, Message: body.Message}
 	}
 	bvInfo := VideoInfo{}
 	err = json.Unmarshal(body.Data, &bvInfo)
@@ -57,7 +57,7 @@ func (client *BiliClient) GetSeasonInfo(epid int, ssid int) (*SeasonInfo, error)
 		return nil, err
 	}
 	if body.Code != 0 {
-		return nil, errors.New(body.Message)
+		return nil, &APIError{Code: body.Code, Message: body.Message}
 	}
 	seasonInfo := SeasonInfo{}
 	err = json.Unmarshal(body.Result, &seasonInfo)
@@ -89,7 +89,7 @@ func (client *BiliClient) GetPlayInfo(bvid string, cid int) (*PlayInfo, error) {
 		return nil, err
 	}
 	if body.Code != 0 {
-		return nil, errors.New(body.Message)
+		return nil, &APIError{Code: body.Code, Message: body.Message}
 	}
 	playInfo := PlayInfo{}
 	err = json.Unmarshal(body.Data, &playInfo)
@@ -231,7 +231,7 @@ func (client *BiliClient) GetFavlistByPage(mediaId int, page int, pageSize int) 
 		return nil, false, err
 	}
 	if body.Code != 0 {
-		return nil, false, fmt.Errorf("body.Code not 0, %s", body.Message)
+		return nil, false, &APIError{Code: body.Code, Message: body.Message}
 	}
 	data := struct {
 		Medias  FavList `json:"medias"`

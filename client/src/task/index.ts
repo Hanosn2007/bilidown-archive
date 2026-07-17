@@ -1,7 +1,7 @@
 import van, { State } from 'vanjs-core'
 import { Route, goto, now } from 'vanjs-router'
 import { checkLogin, GLOBAL_HAS_LOGIN, GLOBAL_HIDE_PAGE, ResJSON, VanComponent } from '../mixin'
-import { deleteTask, getActiveTask, getTaskList, showFile } from './data'
+import { deleteTask, getActiveTask, getTaskList, revealTask } from './data'
 import { TaskInDB, TaskStatus } from '../work/type'
 import { LoadingBox } from '../view'
 import { PlayerModalComp } from './playerModal'
@@ -56,9 +56,8 @@ export class TaskRoute implements VanComponent {
                                     class: 'vstack gap-2 py-2 px-3',
                                     style: `cursor: pointer;`,
                                     onclick() {
-                                        const src = `/api/downloadVideo?path=${encodeURIComponent(
-                                            `${task.folder}\\${filename}`
-                                        )}`
+                                        const filePath = `${task.folder.replace(/[\\/]+$/, '')}/${filename}`
+                                        const src = `/api/downloadVideo?path=${encodeURIComponent(filePath)}`
                                         if (task.statusState.val != 'done') return
                                         _that.playerModalComp.open(src, task.title, task.downloadType === 'audio' ? 'audio' : 'video')
                                     }
@@ -125,7 +124,7 @@ export class TaskRoute implements VanComponent {
                                     div({
                                         class: 'hover-btn', title: '打开文件位置',
                                         onclick() {
-                                            showFile(`${task.folder}\\${filename}`)
+                                            revealTask(task.id).catch(error => alert(error.message))
                                             task.opening.val = true
                                             setTimeout(() => {
                                                 task.opening.val = false

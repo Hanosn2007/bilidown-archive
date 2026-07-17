@@ -2,6 +2,7 @@ package task
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -74,6 +75,63 @@ var GlobalTaskMux = &sync.Mutex{}
 var GlobalDownloadSem = util.NewSemaphore(3)
 var GlobalMergeSem = util.NewSemaphore(3)
 
+func ActiveTasks() []*Task {
+	GlobalTaskMux.Lock()
+	defer GlobalTaskMux.Unlock()
+	result := make([]*Task, len(GlobalTaskList))
+	copy(result, GlobalTaskList)
+	return result
+}
+
+type taskControl struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+var taskControlMux sync.Mutex
+var taskControls = map[int64]taskControl{}
+
+func registerTaskControl(id int64) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	control := taskControl{cancel: cancel, done: make(chan struct{})}
+	taskControlMux.Lock()
+	taskControls[id] = control
+	taskControlMux.Unlock()
+	return ctx, func() {
+		taskControlMux.Lock()
+		if current, ok := taskControls[id]; ok && current.done == control.done {
+			delete(taskControls, id)
+			close(control.done)
+		}
+		taskControlMux.Unlock()
+		GlobalTaskMux.Lock()
+		for i, active := range GlobalTaskList {
+			if active.ID == id {
+				GlobalTaskList = append(GlobalTaskList[:i], GlobalTaskList[i+1:]...)
+				break
+			}
+		}
+		GlobalTaskMux.Unlock()
+	}
+}
+
+// CancelAndWait 取消下载或合并，并等待任务释放文件句柄。
+func CancelAndWait(id int64, timeout time.Duration) bool {
+	taskControlMux.Lock()
+	control, ok := taskControls[id]
+	taskControlMux.Unlock()
+	if !ok {
+		return false
+	}
+	control.cancel()
+	select {
+	case <-control.done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 func (task *Task) Create(db *sql.DB) error {
 	util.SqliteLock.Lock()
 	result, err := db.Exec(`INSERT INTO "task" ("bvid", "cid", "format", "title", "owner", "cover", "status", "folder", "duration", "download_type")
@@ -101,6 +159,8 @@ func (task *Task) Create(db *sql.DB) error {
 
 // Create 创建任务，并将任务加入全局任务列表
 func (task *Task) Start() {
+	ctx, unregister := registerTaskControl(task.ID)
+	defer unregister()
 	if task.DownloadType == "" {
 		task.DownloadType = "merge"
 	}
@@ -109,6 +169,10 @@ func (task *Task) Start() {
 	GlobalTaskMux.Unlock()
 	db := util.MustGetDB()
 	defer db.Close()
+	var exists int
+	if err := db.QueryRow(`SELECT 1 FROM "task" WHERE "id" = ?`, task.ID).Scan(&exists); err != nil {
+		return
+	}
 	sessdata, err := bilibili.GetSessdata(db)
 	if err != nil {
 		task.UpdateStatus(db, "error", fmt.Errorf("bilibili.GetSessdata: %v", err))
@@ -121,7 +185,7 @@ func (task *Task) Start() {
 
 	if task.DownloadType == "audio" {
 		// 仅音频模式：只下载音频，重命名音频文件为输出文件
-		err = DownloadMedia(client, task.Audio, task, "audio")
+		err = DownloadMedia(ctx, client, task.Audio, task, "audio")
 		if err != nil {
 			GlobalDownloadSem.Release()
 			task.UpdateStatus(db, "error", fmt.Errorf("DownloadMedia: %v", err))
@@ -143,7 +207,7 @@ func (task *Task) Start() {
 		return
 	} else if task.DownloadType == "video" {
 		// 仅视频模式：只下载视频，重命名视频文件为输出文件
-		err = DownloadMedia(client, task.Video, task, "video")
+		err = DownloadMedia(ctx, client, task.Video, task, "video")
 		if err != nil {
 			GlobalDownloadSem.Release()
 			task.UpdateStatus(db, "error", fmt.Errorf("DownloadMedia: %v", err))
@@ -165,13 +229,13 @@ func (task *Task) Start() {
 		return
 	} else {
 		// 合并模式：下载音频和视频，然后合并
-		err = DownloadMedia(client, task.Audio, task, "audio")
+		err = DownloadMedia(ctx, client, task.Audio, task, "audio")
 		if err != nil {
 			GlobalDownloadSem.Release()
 			task.UpdateStatus(db, "error", fmt.Errorf("DownloadMedia: %v", err))
 			return
 		}
-		err = DownloadMedia(client, task.Video, task, "video")
+		err = DownloadMedia(ctx, client, task.Video, task, "video")
 		if err != nil {
 			GlobalDownloadSem.Release()
 			task.UpdateStatus(db, "error", fmt.Errorf("DownloadMedia: %v", err))
@@ -183,7 +247,7 @@ func (task *Task) Start() {
 		videoPath := filepath.Join(task.Folder, strconv.FormatInt(task.ID, 10)+".video")
 		audioPath := filepath.Join(task.Folder, strconv.FormatInt(task.ID, 10)+".audio")
 		GlobalMergeSem.Acquire()
-		err = task.MergeMedia(outputPath, videoPath, audioPath)
+		err = task.MergeMedia(ctx, outputPath, videoPath, audioPath)
 		if err != nil {
 			GlobalMergeSem.Release()
 			task.UpdateStatus(db, "error", fmt.Errorf("task.MergeMedia: %v", err))
@@ -211,7 +275,7 @@ func (task *Task) Start() {
 }
 
 // 合并音视频
-func (task *Task) MergeMedia(outputPath string, inputPaths ...string) error {
+func (task *Task) MergeMedia(ctx context.Context, outputPath string, inputPaths ...string) error {
 	inputs := []string{}
 	for _, path := range inputPaths {
 		inputs = append(inputs, "-i", path)
@@ -222,7 +286,7 @@ func (task *Task) MergeMedia(outputPath string, inputPaths ...string) error {
 		return err
 	}
 
-	cmd := exec.Command(ffmpegPath, append(inputs, "-c:v", "copy", "-c:a", "copy", "-progress", "pipe:1", "-strict", "-2", outputPath)...)
+	cmd := exec.CommandContext(ctx, ffmpegPath, append(inputs, "-c:v", "copy", "-c:a", "copy", "-progress", "pipe:1", "-strict", "-2", outputPath)...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -290,11 +354,29 @@ func GetAudioURL(dash *bilibili.Dash) string {
 func (task *Task) UpdateStatus(db *sql.DB, status TaskStatus, errs ...error) error {
 	util.SqliteLock.Lock()
 	_, err := db.Exec(`UPDATE "task" SET "status" = ? WHERE "id" = ?`, status, task.ID)
-	_, _ = db.Exec(`UPDATE "archive_item" SET "status" = ?, "message" = ?, "updated_at" = CURRENT_TIMESTAMP WHERE "task_id" = ?`,
+	_, archiveErr := db.Exec(`UPDATE "archive_item" SET "status" = ?, "message" = ?, "updated_at" = CURRENT_TIMESTAMP WHERE "task_id" = ?`,
 		status, joinErrors(errs...), task.ID)
+	_, partErr := db.Exec(`UPDATE "archive_part" SET "status" = ?, "message" = ?, "updated_at" = CURRENT_TIMESTAMP WHERE "task_id" = ?`,
+		status, joinErrors(errs...), task.ID)
+	_, subjectErr := db.Exec(`UPDATE "archive_subject" SET "status" = CASE
+		WHEN EXISTS (SELECT 1 FROM "archive_item" ai WHERE ai."subject_id" = "archive_subject"."id" AND ai."status" IN ('resolving', 'waiting', 'running')) THEN 'downloading'
+		WHEN EXISTS (SELECT 1 FROM "archive_item" ai WHERE ai."subject_id" = "archive_subject"."id" AND ai."status" = 'error') THEN 'error'
+		WHEN EXISTS (SELECT 1 FROM "archive_item" ai WHERE ai."subject_id" = "archive_subject"."id" AND ai."status" = 'done') THEN 'done'
+		ELSE 'unavailable' END,
+		"updated_at" = CURRENT_TIMESTAMP
+		WHERE "id" IN (SELECT "subject_id" FROM "archive_item" WHERE "task_id" = ?)`, task.ID)
 	util.SqliteLock.Unlock()
 	if err != nil {
-		return nil
+		return err
+	}
+	if archiveErr != nil {
+		return archiveErr
+	}
+	if partErr != nil && !strings.Contains(partErr.Error(), "no such table") {
+		return partErr
+	}
+	if subjectErr != nil && !strings.Contains(subjectErr.Error(), "no such table") {
+		return subjectErr
 	}
 	for _, err := range errs {
 		if err != nil {
@@ -318,55 +400,114 @@ func joinErrors(errs ...error) string {
 	return strings.Join(messages, "; ")
 }
 
-func DownloadMedia(client *bilibili.BiliClient, _url string, task *Task, mediaType string) error {
-	if _url == "" {
+func DownloadMedia(ctx context.Context, client *bilibili.BiliClient, mediaURL string, task *Task, mediaType string) error {
+	if mediaURL == "" {
 		return fmt.Errorf("%s media url is empty", mediaType)
 	}
-	var resp *http.Response
-	var err error
-	for i := 0; i < 5; i++ {
-		resp, err = client.SimpleGET(_url, nil)
-		if err == nil {
-			break
+	finalPath := filepath.Join(task.Folder, strconv.FormatInt(task.ID, 10)+"."+mediaType)
+	if info, err := os.Stat(finalPath); err == nil && info.Size() > 0 {
+		return nil
+	}
+	partPath := finalPath + ".part"
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := downloadMediaAttempt(ctx, client, mediaURL, task, mediaType, partPath); err == nil {
+			if err := os.Rename(partPath, finalPath); err != nil {
+				return err
+			}
+			_ = os.Remove(partPath + ".etag")
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 350 * time.Millisecond):
+			}
 		}
 	}
+	return lastErr
+}
 
+func downloadMediaAttempt(ctx context.Context, client *bilibili.BiliClient, mediaURL string, task *Task, mediaType string, partPath string) error {
+	var offset int64
+	if info, err := os.Stat(partPath); err == nil {
+		offset = info.Size()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return err
+	}
+	request.Header = client.MakeHeader()
+	if offset > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		if etag, err := os.ReadFile(partPath + ".etag"); err == nil && len(etag) > 0 {
+			request.Header.Set("If-Range", string(etag))
+		}
+	}
+	httpClient := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(nil)}}
+	resp, err := httpClient.Do(request)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
-	filename := strconv.FormatInt(task.ID, 10) + "." + mediaType
-	filepath := filepath.Join(task.Folder, filename)
-
-	progress := newProgressBar(resp.ContentLength)
-
-	file, err := os.Create(filepath)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			_ = os.Remove(partPath)
+			_ = os.Remove(partPath + ".etag")
+		}
+		return fmt.Errorf("download status %d", resp.StatusCode)
+	}
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset > 0 && resp.StatusCode == http.StatusPartialContent && strings.HasPrefix(resp.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", offset)) {
+		flags |= os.O_APPEND
+	} else {
+		offset = 0
+		flags |= os.O_TRUNC
+	}
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		_ = os.WriteFile(partPath+".etag", []byte(etag), 0644)
+	}
+	file, err := os.OpenFile(partPath, flags, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	reader := io.TeeReader(resp.Body, file)
-	buf := make([]byte, 1024)
-	for {
-		n, err := reader.Read(buf)
-		if err != nil && err != io.EOF {
-			return err
-		}
-		if n == 0 {
-			break
-		}
-
-		progress.add(n)
-		GlobalTaskMux.Lock()
-		if mediaType == "video" {
-			task.VideoProgress = progress.percent()
-		} else {
-			task.AudioProgress = progress.percent()
-		}
-		GlobalTaskMux.Unlock()
+	total := resp.ContentLength
+	if total > 0 {
+		total += offset
 	}
-	return nil
+	progress := newProgressBar(total)
+	progress.current = offset
+	buf := make([]byte, 128*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, err := file.Write(buf[:n]); err != nil {
+				return err
+			}
+			progress.add(n)
+			GlobalTaskMux.Lock()
+			if mediaType == "video" {
+				task.VideoProgress = progress.percent()
+			} else {
+				task.AudioProgress = progress.percent()
+			}
+			GlobalTaskMux.Unlock()
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return readErr
+		}
+	}
+	return file.Sync()
 }
 
 type progressBar struct {
@@ -379,6 +520,9 @@ func (p *progressBar) add(n int) {
 }
 
 func (p *progressBar) percent() float64 {
+	if p.total <= 0 {
+		return 0
+	}
 	return float64(p.current) / float64(p.total)
 }
 

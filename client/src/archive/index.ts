@@ -31,7 +31,8 @@ type ArchiveItem = {
     infoPath: string
     coverPath: string
     danmakuPath: string
-    status: 'waiting' | 'running' | 'done' | 'error'
+    status: 'resolving' | 'waiting' | 'running' | 'done' | 'error' | 'unavailable'
+    availability: 'unknown' | 'available' | 'unavailable'
     message: string
     createdAt: string
     updatedAt: string
@@ -43,6 +44,13 @@ type ScanResult = {
     skipped: number
     failed: number
     messages: string[]
+}
+
+type ScanState = {
+    id: string
+    running: boolean
+    result?: ScanResult
+    error?: string
 }
 
 type BatchResult = {
@@ -69,7 +77,13 @@ const saveSettings = async (settings: ArchiveSettings) => {
 }
 
 const scanFavorite = async () => {
-    const res = await fetch('/api/archive/scanFavorite', { method: 'POST' }).then(r => r.json()) as ResJSON<ScanResult>
+    const res = await fetch('/api/archive/scanFavorite', { method: 'POST' }).then(r => r.json()) as ResJSON<ScanState>
+    if (!res.success) throw new Error(res.message)
+    return res.data
+}
+
+const getScanStatus = async () => {
+    const res = await fetch('/api/archive/scanStatus').then(r => r.json()) as ResJSON<ScanState>
     if (!res.success) throw new Error(res.message)
     return res.data
 }
@@ -116,8 +130,8 @@ const deleteArchivePreviews = async (ids: number[], all = false) => {
     return res.data
 }
 
-const showFile = async (path: string) => {
-    const res = await fetch(`/api/showFile?filePath=${encodeURIComponent(path)}`).then(r => r.json()) as ResJSON
+const revealArchiveItem = async (id: number) => {
+    const res = await fetch(`/api/archive/reveal?id=${id}`).then(r => r.json()) as ResJSON
     if (!res.success) throw new Error(res.message)
 }
 
@@ -176,6 +190,7 @@ export class ArchiveRoute implements VanComponent {
     danmakuInstance: any = null
     danmakuResizeHandler: (() => void) | null = null
     playerResizeHandler: (() => void) | null = null
+    archivePollTimer: number | null = null
 
     constructor() {
         this.element = this.Root()
@@ -201,6 +216,7 @@ export class ArchiveRoute implements VanComponent {
             async onLoad() {
                 if (!GLOBAL_HAS_LOGIN.val) return goto('login')
                 await _that.refresh()
+                _that.startArchivePolling()
             }
         })
     }
@@ -381,11 +397,20 @@ export class ArchiveRoute implements VanComponent {
                     disabled: this.scanning,
                     onclick: async () => {
                         this.scanning.val = true
-                        this.scanMessage.val = ''
+                        this.scanMessage.val = '扫描已开始，新发现的视频会立即出现在归档列表顶部。'
                         try {
-                            const result = await scanFavorite()
-                            this.scanMessage.val = `发现 ${result.found} 个，新增 ${result.created} 个，跳过 ${result.skipped} 个，失败 ${result.failed} 个`
-                            this.items.val = await listArchive(this.query.val)
+                            await scanFavorite()
+                            while (true) {
+                                this.items.val = await listArchive(this.query.val)
+                                const state = await getScanStatus()
+                                if (!state.running) {
+                                    if (state.error) throw new Error(state.error)
+                                    const result = state.result
+                                    if (result) this.scanMessage.val = `发现 ${result.found} 个，新增 ${result.created} 个，跳过 ${result.skipped} 个，失败 ${result.failed} 个`
+                                    break
+                                }
+                                await new Promise(resolve => setTimeout(resolve, 900))
+                            }
                         } catch (error) {
                             alert((error as Error).message)
                         } finally {
@@ -502,7 +527,7 @@ export class ArchiveRoute implements VanComponent {
         })
         const selectedItems = van.derive(() => this.items.val.filter(item => this.selectedIds.val.has(item.id)))
         const selectedCount = van.derive(() => selectedItems.val.length)
-        const errorSelectedCount = van.derive(() => selectedItems.val.filter(item => item.status == 'error').length)
+        const errorSelectedCount = van.derive(() => selectedItems.val.filter(item => item.status == 'error' || item.status == 'unavailable').length)
         const allVisibleSelected = van.derive(() => filteredItems.val.length > 0 && filteredItems.val.every(item => this.selectedIds.val.has(item.id)))
         const toggleSelected = (item: ArchiveItem) => {
             const next = new Set(this.selectedIds.val)
@@ -537,6 +562,8 @@ export class ArchiveRoute implements VanComponent {
                         option({ value: 'all' }, '全部状态'),
                         option({ value: 'done' }, '已完成'),
                         option({ value: 'error' }, '失败'),
+                        option({ value: 'unavailable' }, '下架／不可用'),
+                        option({ value: 'resolving' }, '读取信息中'),
                         option({ value: 'waiting' }, '等待'),
                         option({ value: 'running' }, '下载中')
                     )
@@ -569,14 +596,14 @@ export class ArchiveRoute implements VanComponent {
                     onclick: async () => {
                         const item = selectedItems.val[0]
                         if (!item) return
-                        try { await showFile(item.infoPath || item.filePath) } catch (error) { alert((error as Error).message) }
+                        try { await revealArchiveItem(item.id) } catch (error) { alert((error as Error).message) }
                     }
                 }, '打开归档位置'),
                 button({
                     class: 'btn btn-outline-primary btn-sm',
                     disabled: () => errorSelectedCount.val == 0 || this.operating.val,
                     onclick: async () => {
-                        const ids = selectedItems.val.filter(item => item.status == 'error').map(item => item.id)
+                        const ids = selectedItems.val.filter(item => item.status == 'error' || item.status == 'unavailable').map(item => item.id)
                         if (ids.length == 0) return
                         this.operating.val = true
                         try {
@@ -625,8 +652,6 @@ export class ArchiveRoute implements VanComponent {
                     class: 'btn btn-outline-danger btn-sm',
                     disabled: () => selectedCount.val == 0 || this.operating.val,
                     onclick: async () => {
-                        const blocked = selectedItems.val.filter(item => item.status == 'waiting' || item.status == 'running').length
-                        if (blocked > 0) return alert('不能删除等待中或下载中的项目')
                         if (!confirm(`确定删除 ${selectedCount.val} 个归档吗？这会删除视频文件、info.json、封面、弹幕和数据库记录。`)) return
                         this.operating.val = true
                         try {
@@ -693,6 +718,15 @@ export class ArchiveRoute implements VanComponent {
                 ))
             )
         )
+    }
+
+    startArchivePolling() {
+        if (this.archivePollTimer != null) return
+        this.archivePollTimer = window.setInterval(async () => {
+            try {
+                this.items.val = await listArchive(this.query.val)
+            } catch { }
+        }, 3000)
     }
 
     destroyDanmaku() {

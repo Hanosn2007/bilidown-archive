@@ -2,9 +2,35 @@ package bilibili
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"bilidown/common"
 )
+
+// APIError 保留 B 站业务错误码，供上层区分“内容已不可用”和临时网络错误。
+type APIError struct {
+	Code    int
+	Message string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("Bilibili API %d: %s", e.Code, e.Message)
+}
+
+func (e *APIError) ContentUnavailable() bool {
+	switch e.Code {
+	case -404, 62002, 62004, 62012:
+		return true
+	}
+	message := strings.ToLower(e.Message)
+	for _, keyword := range []string{"不存在", "已失效", "不可见", "审核", "删除", "not found"} {
+		if strings.Contains(message, keyword) {
+			return true
+		}
+	}
+	return false
+}
 
 // BaseRes 来自 Bilibili 的接口响应，Message 字段为 msg
 type BaseRes struct {
@@ -235,7 +261,10 @@ type Media struct {
 	Codecid   int                `json:"codecid"`
 }
 
-type FavList []struct {
+type FavoriteItem struct {
+	ID       int    `json:"id"`
+	Type     int    `json:"type"`
+	Attr     int    `json:"attr"`
 	Title    string `json:"title"`
 	Cover    string `json:"cover"`
 	Intro    string `json:"intro"`
@@ -246,8 +275,11 @@ type FavList []struct {
 		Face string `json:"face"`
 	} `json:"upper"`
 	PubTime int    `json:"pubtime"`
+	MTime   int64  `json:"fav_time"`
 	Bvid    string `json:"bvid"`
 	Ugc     struct {
 		FirstCid int `json:"first_cid"`
 	} `json:"ugc"`
 }
+
+type FavList []FavoriteItem

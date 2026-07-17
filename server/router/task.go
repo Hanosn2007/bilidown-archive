@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
-	"runtime"
 	"strconv"
 
+	"bilidown/archive"
 	"bilidown/task"
 	"bilidown/util"
 )
@@ -72,7 +71,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func getActiveTask(w http.ResponseWriter, r *http.Request) {
-	util.Res{Success: true, Data: task.GlobalTaskList}.Write(w)
+	util.Res{Success: true, Data: task.ActiveTasks()}.Write(w)
 }
 
 func getTaskList(w http.ResponseWriter, r *http.Request) {
@@ -99,39 +98,6 @@ func getTaskList(w http.ResponseWriter, r *http.Request) {
 	util.Res{Success: true, Message: "获取成功", Data: tasks}.Write(w)
 }
 
-// showFile 调用 Explorer 查看文件位置
-func showFile(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		util.Res{Success: false, Message: "参数错误"}.Write(w)
-		return
-	}
-	filePath := r.FormValue("filePath")
-
-	var cmd *exec.Cmd
-
-	// 根据操作系统选择命令
-	switch runtime.GOOS {
-	case "windows":
-		// Windows 使用 explorer
-		cmd = exec.Command("explorer", "/select,", filePath)
-	case "darwin":
-		// macOS 使用 open
-		cmd = exec.Command("open", "-R", filePath)
-	case "linux":
-		// Linux 使用 xdg-open
-		cmd = exec.Command("xdg-open", filePath)
-	default:
-		util.Res{Success: false, Message: "不支持的操作系统"}.Write(w)
-		return
-	}
-	err := cmd.Start()
-	if err != nil {
-		util.Res{Success: false, Message: err.Error()}.Write(w)
-		return
-	}
-	util.Res{Success: true, Message: "操作成功"}.Write(w)
-}
-
 func deleteTask(w http.ResponseWriter, r *http.Request) {
 	taskIDStr := r.FormValue("id")
 	taskID, err := strconv.Atoi(taskIDStr)
@@ -149,6 +115,21 @@ func deleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		util.Res{Success: false, Message: fmt.Sprintf("task.GetTask: %v", err)}.Write(w)
+		return
+	}
+	if itemID, archiveErr := archive.FindItemIDByTaskID(db, int64(taskID)); archiveErr == nil {
+		result, deleteErr := archive.DeleteItems(db, []int64{itemID})
+		if deleteErr != nil || result.Failed > 0 {
+			if deleteErr == nil {
+				deleteErr = fmt.Errorf("归档文件删除失败")
+			}
+			util.Res{Success: false, Message: deleteErr.Error(), Data: result}.Write(w)
+			return
+		}
+		util.Res{Success: true, Message: "归档文件和索引已同步删除", Data: result}.Write(w)
+		return
+	} else if archiveErr != sql.ErrNoRows {
+		util.Res{Success: false, Message: fmt.Sprintf("检查归档关联失败: %v", archiveErr)}.Write(w)
 		return
 	}
 	filePath := _task.FilePath()
