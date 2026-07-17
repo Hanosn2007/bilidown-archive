@@ -1,43 +1,43 @@
-# Archive UI Demo · Design QA
+# 归档库 UI Demo · 设计验收记录
 
-## Evidence
+## 验收依据
 
-- Source visual truth: user-supplied Bilibili screenshot showing a formal collection with independent BVID members
-- Supporting source: user-supplied Bilibili screenshot showing a multi-P video selection
-- Existing demo style reference: earlier archive UI screenshot supplied during design review
-- Browser-rendered implementation: `docs/archive-ui-demo-qa.png`
-- Side-by-side comparison input: temporary QA artifact (not stored in the repository)
-- Viewport: 1280 × 720 baseline; responsive checks at 800 × 900, 560 × 900, and 390 × 844
-- State: 正式合集成员选中，合集导航和版本管理同时可见
+- 主要视觉依据：用户提供的 B 站正式合集截图，其中各成员拥有独立 BVID
+- 辅助依据：用户提供的 B 站多 P 视频选集截图
+- 既有样式依据：设计评审期间提供的早期归档库 UI 截图
+- 浏览器渲染结果：`docs/archive-ui-demo-qa.png`
+- 并排对比图：仅用于验收的临时文件，不纳入仓库
+- 基准视口：1280 × 720；另检查 800 × 900、560 × 900 和 390 × 844
+- 验收状态：已选中正式合集成员，合集导航与版本管理同时可见
 
-## Findings
+## 验收结果
 
-- No actionable P0/P1/P2 finding remains.
-- Typography: follows the existing demo's system-font hierarchy; long titles and identifiers truncate inside timeline and navigator rows without overflow.
-- Spacing and layout: the approximate 1:3 timeline/watch split is preserved. Relationship navigation forms two readable columns on desktop and one column at the narrow breakpoint.
-- Colors and tokens: new collection, part, and version states reuse the existing pink/blue/green token system in both light and dark modes.
-- Image quality: no new imagery was required; the existing demo thumbnail/player treatment remains unchanged. The Bilibili screenshots were used as structural, not pixel-clone, references.
-- Copy and content: UI now explicitly distinguishes 「正式合集」「视频列表」「视频选集」「版本管理」 and explains the ID boundary for frontend/backend integration.
+- 当前没有待处理的 P0、P1 或 P2 级视觉问题。
+- 字体层级：沿用现有 Demo 的系统字体层级；时间线和导航列表中的长标题、长标识会自动截断，不会溢出。
+- 间距与布局：保持约 1:3 的时间线／观看区比例。桌面端关系导航为两列，窄屏断点下自动改为单列。
+- 颜色与设计变量：新增的合集、分 P、版本状态在明暗主题下均复用现有粉色、蓝色和绿色设计变量。
+- 图片质量：本轮没有新增图片素材；继续使用现有 Demo 的缩略图与播放器占位效果。B 站截图仅用于验证信息结构，不进行像素级照搬。
+- 文案与内容：界面已明确区分「正式合集」「视频列表」「视频选集」「版本管理」，并说明前后端对接时各类 ID 的边界。
 
-Focused comparison was required for the relationship area because the reference's key evidence is the right-side `(n/total)` collection list. The implementation reproduces that relationship as a dedicated container navigator while keeping the project's existing layout and visual language.
+关系区域必须做重点对比，因为参考截图的关键信息是右侧 `(当前项/总数)` 合集列表。Demo 将其实现为独立的容器导航，同时保留项目原有布局和视觉语言。
 
-## Interaction QA
+## 交互验收
 
-- Collection update event returns to the original subject; switching 8/12 to 9/12 changes BVID and CID.
-- P1 to P18 keeps the same BVID and changes CID, duration, title, and active counter.
-- Version v4 to v2 changes the archived source while retaining the subject and its timeline position.
-- Batch parent selection selects all four versions; a child version can be selected independently.
-- Right-click delete opens the centered confirmation dialog; cancel closes it without deletion.
-- Theme cycles in order: light, dark, system.
-- No horizontal overflow at the tested responsive widths.
-- Browser console: no warning or error entries.
+- 点击合集更新事件可跳回首次归档的主体；从第 8/12 项切换到第 9/12 项时，BVID 与 CID 会同步变化。
+- 在 P1 至 P18 间切换时保持同一 BVID，仅更新 CID、时长、标题和当前选集计数。
+- 从版本 v4 切换到 v2 时更换归档来源，但主体和其时间线位置保持不变。
+- 批量管理中勾选父级入口会选中全部四个版本，也可以只勾选单个子版本。
+- 右键删除会打开居中的确认对话框；点击取消后关闭对话框且不执行删除。
+- 主题按钮按「白日 → 暗黑 → 跟随系统」顺序循环。
+- 所有测试宽度均无横向溢出。
+- 浏览器控制台无警告或错误。
 
-## Comparison History
+## 对比记录
 
-- Pass 1: no P0/P1/P2 visual mismatch was found. The implementation intentionally does not clone the complete Bilibili playback page; it borrows the verified collection/selection hierarchy inside the existing Bilidown demo shell.
+- 第 1 轮：未发现 P0、P1 或 P2 级视觉偏差。Demo 不复刻完整的 B 站播放页，而是在 Bilidown 现有界面框架内借鉴已确认的合集／选集层级。
 
-## Follow-up Polish
+## 后续润色
 
-- P3: replace illustrative gradient thumbnails with actual archived covers when the real frontend connects to archive metadata.
+- P3：真实前端接入归档元数据后，将示意渐变缩略图替换为实际归档封面。
 
-final result: passed
+验收结论：通过
